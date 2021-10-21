@@ -2,6 +2,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql.types import *
 from pyspark.sql.functions import explode
 from pyspark.sql.functions import split
+from pyspark.sql.functions import window
 
 def parse_data_from_kafka_message(sdf, schema):
     from pyspark.sql.functions import split
@@ -42,13 +43,21 @@ if __name__ == "__main__":
     lines = parse_data_from_kafka_message(lines, hardwarezoneSchema) \
         .select("topic","author","content","timestamp")
 
+    windowed = lines \
+        .withWatermark("timestamp", "2 minutes") \
+        .groupBy(
+            window("timestamp", "2 minutes", "1 minutes"),
+            "author"
+        ) \
+        .count() \
+        .limit(10)
+
     #Select the content field and output
-    contents = lines \
+    contents = windowed \
         .writeStream \
         .queryName("WriteContent") \
         .outputMode("append") \
         .format("console") \
-        .option("checkpointLocation", "/user/zzj/spark-checkpoint") \
         .start()
 
     #Start the job and wait for the incoming messages
