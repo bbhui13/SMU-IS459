@@ -2,8 +2,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql.types import *
 from pyspark.sql.functions import explode
 from pyspark.sql.functions import split
-from pyspark.sql.functions import window
-from pyspark.sql.functions import col,desc
+from pyspark.sql.functions import window,col,desc
 
 def parse_data_from_kafka_message(sdf, schema):
     from pyspark.sql.functions import split
@@ -29,16 +28,9 @@ if __name__ == "__main__":
             .option("subscribe", "scrapy-output") \
             .option("startingOffsets", "earliest") \
             .load()
-    df2 = spark.readStream \
-            .format("kafka") \
-            .option("kafka.bootstrap.servers", "localhost:9092") \
-            .option("subscribe", "scrapy-output") \
-            .option("startingOffsets", "earliest") \
-            .load()
 
     #Parse the fields in the value column of the message
     lines = df.selectExpr("CAST(value AS STRING)", "timestamp")
-    lines2 = df2.selectExpr("CAST(value AS STRING)", "timestamp")
 
     #Specify the schema of the fields
     hardwarezoneSchema = StructType([ \
@@ -48,26 +40,10 @@ if __name__ == "__main__":
         ])
 
     #Use the function to parse the fields
-    wordlines = parse_data_from_kafka_message(lines, hardwarezoneSchema) \
-        .select("content","timestamp")
-
-    wordline = wordlines.withColumn('content',explode(split('content',' '))).withColumnRenamed('content', 'word')
-
-    windowedword = wordline \
-        .withWatermark("timestamp", "2 minutes") \
-        .groupBy(
-            window("timestamp", "2 minutes", "1 minutes"),
-            "word"
-        ) \
-        .count() \
-        .limit(10)
-
-    windowedword = windowedword.orderBy(col('count').desc())
-
-    authorlines = parse_data_from_kafka_message(lines2, hardwarezoneSchema) \
+    lines = parse_data_from_kafka_message(lines, hardwarezoneSchema) \
         .select("topic","author","content","timestamp")
 
-    windowedauthor = authorlines \
+    windowed = lines \
         .withWatermark("timestamp", "2 minutes") \
         .groupBy(
             window("timestamp", "2 minutes", "1 minutes"),
@@ -76,10 +52,10 @@ if __name__ == "__main__":
         .count() \
         .limit(10)
 
-    windowedauthor = windowedauthor.orderBy(col('count').desc())
+    windowed = windowed.orderBy(col('count').desc())
 
     #Select the content field and output
-    contents = windowedword \
+    contents = windowed \
         .writeStream \
         .queryName("WriteContent") \
         .outputMode("complete") \
@@ -88,14 +64,3 @@ if __name__ == "__main__":
 
     #Start the job and wait for the incoming messages
     contents.awaitTermination()
-
-    #Select the content field and output
-    content = windowedauthor \
-        .writeStream \
-        .queryName("WriteContent") \
-        .outputMode("complete") \
-        .format("console") \
-        .start()
-
-    #Start the job and wait for the incoming messages
-    content.awaitTermination()
